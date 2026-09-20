@@ -1,0 +1,82 @@
+name: Finish Kronos 300 x 24h preserved run
+on:
+  push:
+    branches: ['audit/tsla-300x24h-20260920']
+    paths: ['.github/workflows/kronos-300-resume.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  resume:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 3]
+    env:
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --quiet --index-url https://download.pytorch.org/whl/cpu torch==2.7.1
+          python -m pip install --quiet numpy pandas scipy einops==0.8.1 huggingface_hub==0.33.1 safetensors pandas_market_calendars
+      - uses: actions/download-artifact@v4
+        with:
+          name: tsla-coverage-evidence
+          path: evidence
+          run-id: 35495327493
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: kronos-300-small-${{ matrix.shard }}
+          path: results
+          run-id: 35495599954
+          github-token: ${{ github.token }}
+      - name: Preserve completed predictions and compute only missing origins
+        run: python audit_resume.py --shard '${{ matrix.shard }}' --out results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recovered-small-${{ matrix.shard }}
+          path: results/
+          retention-days: 7
+  summarize:
+    needs: resume
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --quiet numpy pandas scipy
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kronos-300-*
+          path: results
+          merge-multiple: true
+          run-id: 35495599954
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: recovered-small-*
+          path: results
+          merge-multiple: true
+      - name: Require full 300-origin coverage per model and aggregate
+        run: |
+          python audit_300_24h.py --summarize --out results
+          mkdir -p results/code
+          cp audit_300_24h.py audit_driver.py audit_resume.py results/code/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kronos-300-24h-complete-evidence
+          path: results/
+          retention-days: 7
+          if-no-files-found: error
