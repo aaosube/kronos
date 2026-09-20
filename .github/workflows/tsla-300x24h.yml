@@ -1,0 +1,46 @@
+name: TSLA 300 exact-24h endpoint validation
+on:
+  push:
+    branches: ['research/tsla-300x24h-20260920']
+    paths: ['research/tsla_300x24.py', '.github/workflows/tsla-300x24h.yml']
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        model: [mini, small]
+    env:
+      MODEL_KIND: ${{ matrix.model }}
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      HF_HUB_DISABLE_XET: '1'
+    steps:
+      - name: Fetch isolated research branch
+        run: |
+          git clone --depth 1 --single-branch --branch "$GITHUB_REF_NAME" https://github.com/aaosube/kronos.git repo
+          cd repo
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Install pinned CPU dependencies
+        working-directory: repo
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu torch==2.7.1
+          .venv/bin/python -m pip install --disable-pip-version-check numpy==2.2.6 pandas==2.2.3 scipy==1.15.3 einops==0.8.1 huggingface_hub==0.33.1 safetensors==0.5.3 yfinance==0.2.65 pandas_market_calendars==4.6.1
+      - name: Validate and run 300 forecasts
+        working-directory: repo
+        run: |
+          .venv/bin/python -u research/tsla_300x24.py
+          .venv/bin/python -m pip freeze > "results/$MODEL_KIND/environment.txt"
+      - name: Preserve outputs and provenance
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tsla300-${{ matrix.model }}
+          path: repo/results/${{ matrix.model }}
+          retention-days: 7
+          if-no-files-found: warn
