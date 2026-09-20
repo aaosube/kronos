@@ -1,0 +1,70 @@
+name: Kronos TSLA 300 sessions x 24 hours
+on:
+  push:
+    branches: ['audit/tsla-300x24h-20260920']
+    paths: ['.github/workflows/kronos-300-24h.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        model: ['small', 'mini']
+        shard: [0, 1, 2, 3, 4, 5]
+    env:
+      OMP_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU-only inference dependencies
+        run: |
+          python -m pip install --quiet --index-url https://download.pytorch.org/whl/cpu torch==2.7.1
+          python -m pip install --quiet numpy pandas scipy einops==0.8.1 huggingface_hub==0.33.1 safetensors pandas_market_calendars
+      - uses: actions/download-artifact@v4
+        with:
+          name: tsla-coverage-evidence
+          path: evidence
+          run-id: 35495327493
+          github-token: ${{ github.token }}
+      - name: Run 50 separate 24-hour forecasts
+        run: python audit_driver.py --model '${{ matrix.model }}' --shard '${{ matrix.shard }}' --out results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kronos-300-${{ matrix.model }}-${{ matrix.shard }}
+          path: results/
+          retention-days: 7
+          if-no-files-found: error
+  summarize:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --quiet numpy pandas scipy
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kronos-300-*
+          path: results
+          merge-multiple: true
+      - name: Require 300 origins per model and compute paired metrics
+        run: python audit_300_24h.py --summarize --out results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kronos-300-24h-complete-evidence
+          path: results/
+          retention-days: 7
+          if-no-files-found: error
